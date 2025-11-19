@@ -1,0 +1,30 @@
+# Compiled executables
+*.exe
+*.o
+*.obj
+*.out
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Experiment outputs (optional - uncomment if you don't want to track results)
+# experiment_results.csv
+# worst_case.txt
+
+# IDE/Editor files
+.vscode/
+.cph/
+*.swp
+*.swo
+*~
+
+# PDFs (project-specific papers)
+*.pdf
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
