@@ -1,174 +1,50 @@
-# Maximum Independent Set of Rectangles (MISR)
+# Maximum Independent Set of Rectangles (MISR) Solvers
 
-Comparison of optimal vs approximation algorithms for the Maximum Independent Set of Rectangles problem.
+This repository contains implementations of various algorithms to solve the **Maximum Independent Set of Rectangles (MISR)** problem. The goal is to find the maximum cardinality subset of non-overlapping axis-parallel rectangles from a given input set.
 
-## Problem Description
-
-Given a set of rectangles in the 2D plane, find the maximum subset where no two rectangles overlap (open-set intersection - touching edges/corners allowed).
+The repository includes an exact solver (ILP), a theoretical approximation algorithm (Guillotine Cuts), and a practical heuristic (Local Search), along with test scripts to benchmark their performance.
 
 ## Algorithms Implemented
 
-### 1. ILP Solver (`ilp.cpp`)
-- **Type**: Exact/Optimal solution
-- **Method**: Integer Linear Programming using GLPK
-- **Complexity**: NP-hard, exponential worst-case
-- **Use**: Baseline for measuring approximation quality
+### 1. Integer Linear Programming (ILP) - Optimal
+* **File:** `ilp.cpp`
+* **Description:** Finds the mathematically optimal independent set using the **GLPK** (GNU Linear Programming Kit) solver.
+* **Method:** Formulates the problem as maximizing the total weight $\sum x_i$ subject to the constraint $x_i + x_j \le 1$ for all overlapping pairs $(i, j)$, where $x_i \in \{0,1\}$ is a binary variable indicating if rectangle $i$ is selected.
+* **Complexity:** **NP-Hard** (Exponential time).
 
-### 2. Guillotine Cut DP (`Guillotine_Cut_MISR.cpp`)
-- **Type**: Approximation algorithm
-- **Method**: Dynamic programming with guillotine-separable restrictions
-- **Complexity**: O(n⁵) with coordinate compression
-- **Theoretical Bound**: 2-approximation for axis-aligned rectangles
+### 2. Guillotine Cut Dynamic Programming
+* **File:** `Guillotine_Cut_MISR.cpp`
+* **Description:** Finds the maximum independent set obtainable via a sequence of edge-to-edge guillotine cuts. This serves as a $\frac{n}{1+\log n}$ approximation to the general MISR problem.
+* **Method:** Implements an $O(n^5)$ dynamic programming algorithm that recursively partitions the plane. The recurrence relation used is:
+    $$DP[C] = \max_{C_1, C_2} (DP[C_1] \cup DP[C_2])$$
+    for all valid guillotine cuts.
+* **Note:** While polynomial time, the high complexity makes it computationally expensive for $N > 50$.
 
-## Repository Structure
+### 3. Local Search Heuristic
+* **File:** `localsearch.cpp`
+* **Description:** A fast approximation algorithm based on $(k, k+1)$-swaps.
+* **Method:** Starts with a greedy solution and iteratively attempts to improve the solution size by replacing **1** rectangle in the current set with **2** rectangles from outside the set (a (1,2)-swap) until a local optimum is reached.
+* **Performance:** Empirically effective and significantly faster than the exact or DP approaches for random instances.
+* **Complexity:** $N \times O(N^3) = O(N^4)$.
 
-```
-.
-├── ilp.cpp                     # Optimal solver using GLPK
-├── Guillotine_Cut_MISR.cpp    # Guillotine DP approximation
-├── testing.py                  # Benchmark framework
-├── rectangles.txt              # Sample input file
-├── experiment_results.csv      # Output data
-├── worst_case.txt              # Worst approximation instance
-└── README.md
-```
+## Dependencies
 
-## Requirements
-
-### C++ Compilation
-- **Compiler**: g++ with C++17 support
-- **Library**: GLPK (GNU Linear Programming Kit)
-
-#### Installing GLPK (Windows/MSYS2)
-```bash
-pacman -S mingw-w64-x86_64-glpk
-```
-
-#### Installing GLPK (Linux)
-```bash
-sudo apt-get install libglpk-dev
-```
-
-### Python
-- Python 3.7+
-- Standard library only (subprocess, csv, random, re, time)
+* **C++ Compiler:** `g++` (supports C++11 or later).
+* **GLPK (GNU Linear Programming Kit):** Required for the ILP solver.
+    * *Ubuntu/Debian:* `sudo apt-get install libglpk-dev`
+    * *MacOS:* `brew install glpk`
+* **Python 3:** Required for running the test scripts.
 
 ## Compilation
 
-```bash
-# ILP solver
-g++ ilp.cpp -o ilp.exe -std=c++17 -lglpk
-
-# Guillotine solver
-g++ Guillotine_Cut_MISR.cpp -o guillotine.exe -std=c++17
-```
-
-## Usage
-
-### Running Individual Solvers
-
-**Input Format** (`rectangles.txt`):
-```
-n
-x1 y1 x2 y2
-x1 y1 x2 y2
-...
-```
-
-Example:
-```
-3
-0 0 2 2
-1 1 3 3
-0 2 2 4
-```
-
-**Execute**:
-```bash
-# Via stdin
-cat rectangles.txt | ./ilp.exe
-cat rectangles.txt | ./guillotine.exe
-
-# PowerShell
-Get-Content rectangles.txt | .\ilp.exe
-Get-Content rectangles.txt | .\guillotine.exe
-```
-
-### Running Benchmark Suite
+To compile all solvers, run the following commands in your terminal:
 
 ```bash
-python testing.py
-```
+# Compile Optimal ILP Solver
+g++ -O3 ilp.cpp -lglpk -o ilp
 
-**Configuration** (`testing.py`):
-- `NUM_TRIALS`: Number of random instances (default: 100)
-- `MIN_RECTANGLES`: Starting problem size (default: 20)
-- `MAX_RECTANGLES`: Ending problem size (default: 70)
-- `GRID_MULTIPLIER`: Grid size factor (default: 10)
-- `ILP_TIMEOUT`: ILP time limit in seconds (default: 30)
-- `GUILL_TIMEOUT`: Guillotine time limit in seconds (default: 60)
+# Compile Guillotine DP Solver
+g++ -O3 Guillotine_Cut_MISR.cpp -o guillotine
 
-**Output**:
-- Live progress printed to console
-- `experiment_results.csv`: Trial-by-trial results with approximation ratios
-- `worst_case.txt`: Input instance where Guillotine performed worst
-
-## Output Interpretation
-
-### Approximation Ratio
-```
-ratio = ILP_score / Guillotine_score
-```
-
-- **ratio = 1.0**: Guillotine found the optimal solution
-- **ratio = 1.2**: ILP found 20% more rectangles than Guillotine
-- **ratio → ∞**: Guillotine failed (returned 0)
-
-### CSV Columns
-- `trial`: Trial number
-- `n_rectangles`: Number of rectangles in instance
-- `grid_size`: Coordinate space dimensions
-- `ilp_score`: Optimal solution size
-- `guillotine_score`: Approximation solution size
-- `ratio`: ILP/Guillotine ratio
-- `ilp_time`: ILP execution time (seconds)
-- `guillotine_time`: Guillotine execution time (seconds)
-- `ilp_status`: `ok`, `timeout`, or `error`
-- `guillotine_status`: `ok`, `timeout`, or `error`
-
-## Algorithm Details
-
-### ILP Formulation
-```
-maximize: Σ xᵢ
-subject to:
-  xᵢ + xⱼ ≤ 1  for all overlapping pairs (i,j)
-  xᵢ ∈ {0,1}
-```
-
-### Guillotine Cuts
-- **Recursive partitioning**: Split region with vertical/horizontal cuts
-- **Coordinate compression**: Maps sparse coordinates to dense indices
-- **Memoization**: Caches subproblem results
-- **Optimizations**: Limited cut sampling to reduce O(n⁵) overhead
-
-## Performance Notes
-
-- **ILP**: Fast for n ≤ 50, becomes slow beyond n = 70-100
-- **Guillotine**: Polynomial but high constant factor; optimized version handles n ≤ 80
-- **Grid density**: Sparser grids → fewer conflicts → easier problems
-
-## Known Issues
-
-- Guillotine times out on dense instances with n > 40
-- ILP may exceed 30s timeout for n > 60 with many conflicts
-- Both algorithms use open-set overlap detection (boundaries don't conflict)
-
-## References
-
-- GLPK Documentation: https://www.gnu.org/software/glpk/
-- Guillotine separable rectangles: Classic approximation algorithm for geometric packing
-
-## License
-
-Educational/Research use. Original algorithms from published literature.
+# Compile Local Search Solver
+g++ -O3 localsearch.cpp -o localsearch

@@ -3,44 +3,42 @@ import random
 import re
 import time
 import csv
+import sys
 
 # --- CONFIGURATION ---
-NUM_TRIALS = 100
-MIN_RECTANGLES = 20
-MAX_RECTANGLES = 70
-GRID_MULTIPLIER = 10            # grid_size = n_rectangles * GRID_MULTIPLIER
+NUM_TRIALS = 50                 # Run many trials to increase chance of finding bad cases
+MIN_RECTANGLES = 40             # Start at 40 (where complexity begins to ramp up)
+MAX_RECTANGLES = 50             # Cap at 50 to avoid timeouts (N=50 takes ~30s)
+GRID_MULTIPLIER = 2             # grid_size = n_rectangles * GRID_MULTIPLIER
 OUTPUT_FILE = "experiment_results.csv"
-WORST_CASE_FILE = "worst_case.txt"
 
-ILP_EXECUTABLE = "ilp.exe"
-GUILL_EXECUTABLE = "guillotine.exe"
+# Executable names
+ILP_EXECUTABLE = "./ilp" if sys.platform != "win32" else "ilp.exe"
+GUILL_EXECUTABLE = "./guillotine" if sys.platform != "win32" else "guillotine.exe"
 
-ILP_TIMEOUT = 30.0              # seconds
-GUILL_TIMEOUT = 60.0            # seconds
+ILP_TIMEOUT = 60.0              # seconds
+GUILL_TIMEOUT = 60.0            # seconds (N=50 can take ~30-40s)
 
-RANDOM_SEED = 0 
+# REMOVED FIXED SEED to ensure new random instances every run
+# random.seed(42) 
 
 
 # --- INSTANCE GENERATION ---
 
 def generate_rectangles(n, grid_size):
     """
-    Generates rectangles on a grid. They may overlap.
-    They are small compared to the grid, which tends to help guillotine cuts.
-    Format returned: list of strings "x1 y1 x2 y2".
+    Generates rectangles on a grid.
     """
     rects = []
+    # Dimensions relative to grid
+    max_dim = max(1, grid_size // 3) 
+    min_dim = max(1, grid_size // 10)
+
     for _ in range(n):
-        # ensure these are at least 1
-        min_w = max(1, grid_size // 20)
-        max_w = max(1, grid_size // 10)
-        min_h = max(1, grid_size // 20)
-        max_h = max(1, grid_size // 10)
+        w = random.randint(min_dim, max_dim)
+        h = random.randint(min_dim, max_dim)
 
-        w = random.randint(min_w, max_w)
-        h = random.randint(min_h, max_h)
-
-        # Random position ensuring the rectangle fits
+        # Random position ensuring the rectangle fits inside the grid
         x1 = random.randint(0, max(0, grid_size - w))
         y1 = random.randint(0, max(0, grid_size - h))
         x2 = x1 + w
@@ -55,21 +53,6 @@ def generate_rectangles(n, grid_size):
 def run_solver(executable, input_str, timeout):
     """
     Run a solver executable and extract the number of selected rectangles.
-
-    Assumes:
-      - Input is provided on stdin in format:
-            n
-            x1 y1 x2 y2
-            ...
-      - Output contains either:
-            "Number of rectangles selected: X"
-        or  "Rectangles selected: X"
-
-    Returns:
-      (score, elapsed_time, raw_output, status)
-
-      score  : int or None (None on error/timeout/parse failure)
-      status : "ok", "timeout", or "error"
     """
     start_time = time.time()
     try:
@@ -81,12 +64,10 @@ def run_solver(executable, input_str, timeout):
             timeout=timeout,
         )
         elapsed_time = time.time() - start_time
-
         output = (process.stdout or "") + (process.stderr or "")
 
         if process.returncode != 0:
-            print(f"[WARN] {executable} exited with code {process.returncode}")
-            return None, elapsed_time, output, "error"
+            return None, elapsed_time, output, f"error (code {process.returncode})"
 
         # Extract number of selected rectangles
         match = re.search(
@@ -97,45 +78,35 @@ def run_solver(executable, input_str, timeout):
             score = int(match.group(1))
             return score, elapsed_time, output, "ok"
 
-        print(f"[WARN] Could not parse score from {executable} output.")
-        return None, elapsed_time, output, "error"
+        return None, elapsed_time, output, "parse_error"
 
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         elapsed_time = time.time() - start_time
-        msg = f"TIMEOUT after {timeout} seconds: {e}"
-        print(f"[WARN] {msg}")
-        return None, elapsed_time, msg, "timeout"
+        return None, elapsed_time, "", "timeout"
+
+    except FileNotFoundError:
+        return None, 0, "", "exec_not_found"
 
     except Exception as e:
         elapsed_time = time.time() - start_time
-        msg = f"Exception: {e}"
-        print(f"[ERROR] Error running {executable}: {e}")
-        return None, elapsed_time, msg, "error"
+        return None, elapsed_time, str(e), "exception"
 
 
 # --- MAIN EXPERIMENT ---
 
 def main():
-    random.seed(RANDOM_SEED)
-
     results = []
-    worst_ratio = 0.0
-    worst_case_input = ""
+    interesting_cases = 0
 
     fieldnames = [
-        'trial',
-        'n_rectangles',
-        'grid_size',
-        'ilp_score',
-        'guillotine_score',
-        'ratio',
-        'ilp_time',
-        'guillotine_time',
-        'ilp_status',
-        'guillotine_status',
+        'trial', 'n_rectangles', 'grid_size', 
+        'ilp_score', 'guillotine_score', 'ratio', 
+        'ilp_time', 'guillotine_time', 
+        'ilp_status', 'guillotine_status'
     ]
 
-    print(f"{'Trial':<6} | {'N':<4} | {'ILP':<6} | {'Guill':<6} | {'Ratio':<9} | {'ILP_Time':<9} | {'G_Time':<9} | Status")
+    print(f"Searching for hard instances (Ratio > 1) with N={MIN_RECTANGLES}-{MAX_RECTANGLES}...")
+    print(f"{'Trial':<6} | {'N':<4} | {'ILP':<6} | {'Guill':<6} | {'Ratio':<8} | {'ILP_T':<7} | {'G_T':<7} | Note")
     print("-" * 100)
 
     with open(OUTPUT_FILE, 'w', newline='') as csvfile:
@@ -143,103 +114,76 @@ def main():
         writer.writeheader()
 
         for i in range(NUM_TRIALS):
-            # Gradually increase rectangle count from MIN to MAX
-            if NUM_TRIALS > 1:
-                n_rectangles = MIN_RECTANGLES + int((MAX_RECTANGLES - MIN_RECTANGLES) * i / (NUM_TRIALS - 1))
-            else:
-                n_rectangles = MIN_RECTANGLES
+            # Randomly pick N in the range for this trial
+            n_rectangles = random.randint(MIN_RECTANGLES, MAX_RECTANGLES)
 
             grid_size = int(n_rectangles * GRID_MULTIPLIER)
             rect_data = generate_rectangles(n_rectangles, grid_size)
             input_str = f"{n_rectangles}\n" + "\n".join(rect_data)
 
-            # Run ILP (optimal solution)
-            ilp_score, ilp_time, ilp_output, ilp_status = run_solver(
+            # 1. Run ILP (Optimal)
+            ilp_score, ilp_time, ilp_out, ilp_stat = run_solver(
                 ILP_EXECUTABLE, input_str, ILP_TIMEOUT
             )
 
-            # Run Guillotine DP (approximation)
-            guill_score, guill_time, guill_output, guill_status = run_solver(
+            # 2. Run Guillotine (Approximation)
+            guill_score, guill_time, guill_out, guill_stat = run_solver(
                 GUILL_EXECUTABLE, input_str, GUILL_TIMEOUT
             )
 
-            # Calculate approximation ratio (OPT / Guillotine)
+            # 3. Calculate Ratio
             ratio = None
-            status_summary = f"ILP:{ilp_status}, G:{guill_status}"
+            note = ""
+            if ilp_score is not None and guill_score is not None and guill_score > 0:
+                ratio = ilp_score / guill_score
+                results.append(ratio)
+                if ratio > 1.000001:  # Floating point tolerance
+                    note = "*** RATIO > 1 ***"
+                    interesting_cases += 1
+            elif ilp_score == 0 and guill_score == 0:
+                ratio = 1.0
+                results.append(1.0)
+            
+            # Format outputs
+            r_str = f"{ratio:.4f}" if ratio else "-"
+            i_score_str = str(ilp_score) if ilp_score is not None else "-"
+            g_score_str = str(guill_score) if guill_score is not None else "-"
+            
+            # If timeout, mark clearly
+            if ilp_stat == "timeout" or guill_stat == "timeout":
+                note = "TIMEOUT"
 
-            if ilp_score is not None and guill_score is not None:
-                if guill_score == 0:
-                    if ilp_score > 0:
-                        ratio = float('inf')
-                    else:
-                        ratio = 1.0
-                else:
-                    ratio = ilp_score / guill_score
-
-            # Print per-trial line
-            ratio_str = f"{ratio:.4f}" if isinstance(ratio, (int, float)) and ratio != float('inf') else str(ratio)
             print(
                 f"{i+1:<6} | {n_rectangles:<4} | "
-                f"{(ilp_score if ilp_score is not None else '-'): <6} | "
-                f"{(guill_score if guill_score is not None else '-'): <6} | "
-                f"{ratio_str:<9} | {ilp_time:<9.4f} | {guill_time:<9.4f} | {status_summary}"
+                f"{i_score_str:<6} | {g_score_str:<6} | "
+                f"{r_str:<8} | {ilp_time:<7.2f} | {guill_time:<7.2f} | {note}"
             )
 
-            results.append(ratio)
-
-            row = {
+            # Save results
+            writer.writerow({
                 'trial': i + 1,
                 'n_rectangles': n_rectangles,
                 'grid_size': grid_size,
-                'ilp_score': ilp_score if ilp_score is not None else "",
-                'guillotine_score': guill_score if guill_score is not None else "",
-                'ratio': ratio if (isinstance(ratio, (int, float)) and ratio != float('inf')) else "",
-                'ilp_time': ilp_time,
-                'guillotine_time': guill_time,
-                'ilp_status': ilp_status,
-                'guillotine_status': guill_status,
-            }
-            writer.writerow(row)
+                'ilp_score': i_score_str,
+                'guillotine_score': g_score_str,
+                'ratio': r_str,
+                'ilp_time': f"{ilp_time:.4f}",
+                'guillotine_time': f"{guill_time:.4f}",
+                'ilp_status': ilp_stat,
+                'guillotine_status': guill_stat,
+            })
             csvfile.flush()
 
-            # Track worst finite ratio where both solvers succeeded
-            if (
-                ratio is not None
-                and ratio != float('inf')
-                and ilp_status == "ok"
-                and guill_status == "ok"
-                and ratio > worst_ratio
-            ):
-                worst_ratio = ratio
-                worst_case_input = input_str
-
-    print(f"\nResults saved to {OUTPUT_FILE}")
-
-    # --- ANALYSIS ---
-    # Consider only finite ratios
-    valid_ratios = [
-        r for r in results
-        if isinstance(r, (int, float)) and r not in (None, float('inf'))
-    ]
-
-    if valid_ratios:
-        avg_ratio = sum(valid_ratios) / len(valid_ratios)
-        max_ratio = max(valid_ratios)
-        min_ratio = min(valid_ratios)
-
-        print("\n=== SUMMARY (finite ratios only) ===")
-        print(f"Average Ratio (OPT/Guillotine): {avg_ratio:.4f}")
-        print(f"Worst Case Ratio: {max_ratio:.4f}")
-        print(f"Best Case Ratio: {min_ratio:.4f}")
-        print(f"Valid trials (finite ratios): {len(valid_ratios)}/{NUM_TRIALS}")
-
-        if worst_case_input:
-            with open(WORST_CASE_FILE, "w") as f:
-                f.write(worst_case_input)
-            print(f"\nWorst case input saved to '{WORST_CASE_FILE}'")
-    else:
-        print("\nNo valid finite ratios to analyze.")
-
+    # --- SUMMARY ---
+    print("\n" + "="*30)
+    print(" EXPERIMENT COMPLETE")
+    print("="*30)
+    
+    if results:
+        print(f"Mean Ratio: {sum(results)/len(results):.4f}")
+    
+    print(f"Interesting cases (Ratio > 1): {interesting_cases}")
+    print(f"Full results saved to: {OUTPUT_FILE}")
 
 if __name__ == "__main__":
     main()
